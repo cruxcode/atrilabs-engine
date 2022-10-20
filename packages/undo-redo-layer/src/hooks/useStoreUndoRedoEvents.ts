@@ -7,12 +7,13 @@ import {
   TreeNode,
   HardPatchEvent,
 } from "@atrilabs/forest";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ComponentTreeId from "@atrilabs/app-design-forest/lib/componentTree?id";
 import {
   createReverseMap,
   getAllNodeIdsFromReverseMap,
 } from "@atrilabs/canvas-runtime-utils";
+import { subscribeBreakpointChange } from "@atrilabs/canvas-runtime";
 
 type UndoRecord = {
   undo: AnyEvent[];
@@ -22,7 +23,7 @@ type UndoRecord = {
 
 type Queue = {
   [forestPkgId: string]: {
-    [pageId: string]: { events: UndoRecord[] };
+    [pageId: string]: { [maxWidth: string]: { events: UndoRecord[] } };
   };
 };
 
@@ -32,34 +33,50 @@ const redoQueue: Queue = {};
 function addToUndoQueue(
   forestPkgId: string,
   pageId: string,
-  undoEvent: UndoRecord
+  undoEvent: UndoRecord,
+  maxWidth: string
 ) {
   if (!(forestPkgId in undoQueue)) {
     undoQueue[forestPkgId] = {};
   }
   if (!(pageId in undoQueue[forestPkgId])) {
-    undoQueue[forestPkgId][pageId] = { events: [] };
+    undoQueue[forestPkgId][pageId] = { [maxWidth]: { events: [] } };
   }
-  undoQueue[forestPkgId][pageId].events.push(undoEvent);
+  if (!(maxWidth in undoQueue[forestPkgId][pageId])) {
+    undoQueue[forestPkgId][pageId][maxWidth] = { events: [] };
+  }
+  undoQueue[forestPkgId][pageId][maxWidth].events.push(undoEvent);
 }
 
 function addToRedoQueue(
   forestPkgId: string,
   pageId: string,
-  undoEvent: UndoRecord
+  undoEvent: UndoRecord,
+  maxWidth: string
 ) {
   if (!(forestPkgId in redoQueue)) {
     redoQueue[forestPkgId] = {};
   }
   if (!(pageId in redoQueue[forestPkgId])) {
-    redoQueue[forestPkgId][pageId] = { events: [] };
+    redoQueue[forestPkgId][pageId] = { [maxWidth]: { events: [] } };
   }
-  redoQueue[forestPkgId][pageId].events.push(undoEvent);
+  if (!(maxWidth in redoQueue[forestPkgId][pageId])) {
+    redoQueue[forestPkgId][pageId][maxWidth] = { events: [] };
+  }
+  redoQueue[forestPkgId][pageId][maxWidth].events.push(undoEvent);
 }
 
-export function popFromUndoQueue(forestPkgId: string, pageId: string) {
-  if (forestPkgId in undoQueue && pageId in undoQueue[forestPkgId]) {
-    const poppedEvent = undoQueue[forestPkgId][pageId].events.pop();
+export function popFromUndoQueue(
+  forestPkgId: string,
+  pageId: string,
+  maxWidth: string
+) {
+  if (
+    forestPkgId in undoQueue &&
+    pageId in undoQueue[forestPkgId] &&
+    maxWidth in undoQueue[forestPkgId][pageId]
+  ) {
+    const poppedEvent = undoQueue[forestPkgId][pageId][maxWidth].events.pop();
     if (poppedEvent) {
       if (poppedEvent.beforeUndo) {
         const newUndoRecord = poppedEvent.beforeUndo(
@@ -68,17 +85,25 @@ export function popFromUndoQueue(forestPkgId: string, pageId: string) {
         poppedEvent.redo = newUndoRecord.redo;
         poppedEvent.undo = newUndoRecord.undo;
       }
-      addToRedoQueue(forestPkgId, pageId, poppedEvent);
+      addToRedoQueue(forestPkgId, pageId, poppedEvent, maxWidth);
     }
     return poppedEvent;
   }
 }
 
-export function popFromRedoQueue(forestPkgId: string, pageId: string) {
-  if (forestPkgId in redoQueue && pageId in redoQueue[forestPkgId]) {
-    const poppedEvent = redoQueue[forestPkgId][pageId].events.pop();
+export function popFromRedoQueue(
+  forestPkgId: string,
+  pageId: string,
+  maxWidth: string
+) {
+  if (
+    forestPkgId in redoQueue &&
+    pageId in redoQueue[forestPkgId] &&
+    maxWidth in redoQueue[forestPkgId][pageId]
+  ) {
+    const poppedEvent = redoQueue[forestPkgId][pageId][maxWidth].events.pop();
     if (poppedEvent) {
-      addToUndoQueue(forestPkgId, pageId, poppedEvent);
+      addToUndoQueue(forestPkgId, pageId, poppedEvent, maxWidth);
     }
     return poppedEvent;
   }
@@ -87,9 +112,20 @@ export function popFromRedoQueue(forestPkgId: string, pageId: string) {
 const UNDO_REDO_NAME = "UNDO_REDO_EVENT";
 
 export const useStoreUndoRedoEvents = () => {
+  const [breakpoint, setBreakpoint] = useState<string>("desktop");
+  useEffect(() => {
+    subscribeBreakpointChange((point) => {
+      if (point === null) {
+        setBreakpoint("desktop");
+      } else {
+        setBreakpoint(point.max.toString());
+      }
+    });
+  }, []);
+
   const undo = useCallback(() => {
     const { forestPkgId, forestId } = BrowserForestManager.currentForest;
-    const undoRecord = popFromUndoQueue(forestPkgId, forestId);
+    const undoRecord = popFromUndoQueue(forestPkgId, forestId, breakpoint);
     if (undoRecord?.undo) {
       api.postNewEvents(forestPkgId, forestId, {
         events: undoRecord?.undo,
@@ -99,10 +135,11 @@ export const useStoreUndoRedoEvents = () => {
         name: "UNDO_REDO_EVENT",
       });
     }
-  }, []);
+  }, [breakpoint]);
+
   const redo = useCallback(() => {
     const { forestPkgId, forestId } = BrowserForestManager.currentForest;
-    const undoRecord = popFromRedoQueue(forestPkgId, forestId);
+    const undoRecord = popFromRedoQueue(forestPkgId, forestId, breakpoint);
     if (undoRecord?.redo) {
       api.postNewEvents(forestPkgId, forestId, {
         events: undoRecord?.redo,
@@ -112,7 +149,7 @@ export const useStoreUndoRedoEvents = () => {
         name: "UNDO_REDO_EVENT",
       });
     }
-  }, []);
+  }, [breakpoint]);
 
   useEffect(() => {
     const { subscribeForest } = BrowserForestManager.currentForest;
@@ -140,18 +177,23 @@ export const useStoreUndoRedoEvents = () => {
                 type: `DELETE$$${ComponentTreeId}`,
                 id: compNode.id,
               };
-              addToUndoQueue(forestPkgId, forestId, {
-                undo: [newDeleteCompEvent],
-                redo: [],
-                beforeUndo: (oldRecord) => {
-                  const compNode = componentTree.nodes[update.id];
-                  const createEvent: CreateEvent = {
-                    type: `CREATE$$${ComponentTreeId}`,
-                    ...JSON.parse(JSON.stringify(compNode)),
-                  };
-                  return { ...oldRecord, redo: [createEvent] };
+              addToUndoQueue(
+                forestPkgId,
+                forestId,
+                {
+                  undo: [newDeleteCompEvent],
+                  redo: [],
+                  beforeUndo: (oldRecord) => {
+                    const compNode = componentTree.nodes[update.id];
+                    const createEvent: CreateEvent = {
+                      type: `CREATE$$${ComponentTreeId}`,
+                      ...JSON.parse(JSON.stringify(compNode)),
+                    };
+                    return { ...oldRecord, redo: [createEvent] };
+                  },
                 },
-              });
+                breakpoint
+              );
             }
           }
           if (
@@ -172,32 +214,37 @@ export const useStoreUndoRedoEvents = () => {
                   type: `DELETE$$${ComponentTreeId}`,
                   id: compNode.id,
                 };
-                addToUndoQueue(forestPkgId, forestId, {
-                  undo: [newDeleteCompEvent],
-                  redo: [],
-                  beforeUndo: (oldRecord) => {
-                    const reverseMap = createReverseMap(
-                      componentTree.nodes,
-                      compNode.id
-                    );
-                    const allDeletedNodeIds = [compNode.id].concat(
-                      getAllNodeIdsFromReverseMap(reverseMap, compNode.id)
-                    );
-                    const createEvents = allDeletedNodeIds.map((nodeId) => {
-                      const deletedNode = JSON.parse(
-                        JSON.stringify(componentTree.nodes[nodeId])
-                      ) as TreeNode;
-                      const createEvent: CreateEvent = {
-                        type: `CREATE$$${ComponentTreeId}`,
-                        id: deletedNode.id,
-                        meta: deletedNode.meta,
-                        state: deletedNode.state,
-                      };
-                      return createEvent;
-                    });
-                    return { ...oldRecord, redo: createEvents };
+                addToUndoQueue(
+                  forestPkgId,
+                  forestId,
+                  {
+                    undo: [newDeleteCompEvent],
+                    redo: [],
+                    beforeUndo: (oldRecord) => {
+                      const reverseMap = createReverseMap(
+                        componentTree.nodes,
+                        compNode.id
+                      );
+                      const allDeletedNodeIds = [compNode.id].concat(
+                        getAllNodeIdsFromReverseMap(reverseMap, compNode.id)
+                      );
+                      const createEvents = allDeletedNodeIds.map((nodeId) => {
+                        const deletedNode = JSON.parse(
+                          JSON.stringify(componentTree.nodes[nodeId])
+                        ) as TreeNode;
+                        const createEvent: CreateEvent = {
+                          type: `CREATE$$${ComponentTreeId}`,
+                          id: deletedNode.id,
+                          meta: deletedNode.meta,
+                          state: deletedNode.state,
+                        };
+                        return createEvent;
+                      });
+                      return { ...oldRecord, redo: createEvents };
+                    },
                   },
-                });
+                  breakpoint
+                );
               }
             }
           }
@@ -221,10 +268,15 @@ export const useStoreUndoRedoEvents = () => {
               type: `DELETE$$${ComponentTreeId}`,
               id: update.topNode.id,
             };
-            addToUndoQueue(forestPkgId, forestId, {
-              undo: createEvents,
-              redo: [deleteEvent],
-            });
+            addToUndoQueue(
+              forestPkgId,
+              forestId,
+              {
+                undo: createEvents,
+                redo: [deleteEvent],
+              },
+              breakpoint
+            );
           }
           if (update.type === "rewire" && update.treeId === ComponentTreeId) {
             const { childId, oldParentId, oldIndex, newIndex, newParentId } =
@@ -243,10 +295,15 @@ export const useStoreUndoRedoEvents = () => {
                 parent: { id: newParentId, index: newIndex },
               },
             };
-            addToUndoQueue(forestPkgId, forestId, {
-              undo: [oldPatchEvent],
-              redo: [newPatchEvent],
-            });
+            addToUndoQueue(
+              forestPkgId,
+              forestId,
+              {
+                undo: [oldPatchEvent],
+                redo: [newPatchEvent],
+              },
+              breakpoint
+            );
           }
           if (
             update.type === "change" &&
@@ -272,16 +329,21 @@ export const useStoreUndoRedoEvents = () => {
               id: nodeId,
               state: newState,
             };
-            addToUndoQueue(forestPkgId, forestId, {
-              undo: [oldPatch],
-              redo: [newPatch],
-            });
+            addToUndoQueue(
+              forestPkgId,
+              forestId,
+              {
+                undo: [oldPatch],
+                redo: [newPatch],
+              },
+              breakpoint
+            );
           }
         }
       }
     );
     return unsub;
-  }, []);
+  }, [breakpoint]);
 
   return { undo, redo };
 };
