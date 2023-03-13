@@ -22,17 +22,22 @@ const cssTreeOptions: CSSTreeOptions = {
 
 const customTreeOptions: CustomPropsTreeOptions = {
   dataTypes: {
+    text: { type: "text" },
+    description: { type: "text" },
     alertType: {
       type: "enum",
       options: ["success", "info", "warning", "error"],
     },
-    title: { type: "text" },
-    description: { type: "text" },
+    showIcon: { type: "boolean" },
+    icon: { type: "static_asset" },
+    isClosable: { type: "boolean" },
+    closeText: { type: "text" },
+    closeIcon: {type: "static_asset"},
+    banner: { type: "boolean" },  
     successIcon: { type: "static_asset" },
     infoIcon: { type: "static_asset" },
     warningIcon: { type: "static_asset" },
-    errorIcon: { type: "static_asset" },
-    isClosable: { type: "boolean" },
+    errorIcon: { type: "static_asset" },  
   },
 };
 
@@ -60,9 +65,10 @@ const compManifest: ReactComponentManifestSchema = {
       custom: {
         treeId: CustomTreeId,
         initialValue: {
-          title: "Alert Title",
+          text: "Alert Title",
           description: "Alert Description",
           isClosable: true,
+          showIcon:true,
         },
         treeOptions: customTreeOptions,
         canvasOptions: { groupByBreakpoint: false },
